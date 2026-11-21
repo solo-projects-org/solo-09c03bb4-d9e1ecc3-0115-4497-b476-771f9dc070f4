@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "pm25_column": "pm25",
+  "files": [
+    {
+      "path": "station=station-A/date=2026-01-01/part-000.parquet",
+      "size": 517,
+      "mtime_ns": 1795244415122163987
+    },
+    {
+      "path": "station=station-A/date=2026-01-02/part-000.parquet",
+      "size": 508,
+      "mtime_ns": 1795244415122773514
+    },
+    {
+      "path": "station=station-A/date=2026-01-03/part-000.parquet",
+      "size": 940,
+      "mtime_ns": 1795244415123175252
+    },
+    {
+      "path": "station=station-B/date=2026-01-01/part-000.parquet",
+      "size": 507,
+      "mtime_ns": 1795244415123632158
+    },
+    {
+      "path": "station=station-B/date=2026-01-02/part-000.parquet",
+      "size": 391,
+      "mtime_ns": 1795244415123905057
+    },
+    {
+      "path": "station=station-B/date=2026-01-03/part-000.parquet",
+      "size": 503,
+      "mtime_ns": 1795244415124223458
+    },
+    {
+      "path": "station=station-C/date=2026-01-01/part-nostats.parquet",
+      "size": 415,
+      "mtime_ns": 1795244415124607707
+    },
+    {
+      "path": "station=station-C/date=2026-01-02/part-nocolumn.parquet",
+      "size": 500,
+      "mtime_ns": 1795244415125587515
+    },
+    {
+      "path": "station=station-C/date=2026-01-03/part-corrupt.parquet",
+      "size": 249,
+      "mtime_ns": 1795244415126367192
+    },
+    {
+      "path": "station=station-C/date=2026-01-03/part-good.parquet",
+      "size": 503,
+      "mtime_ns": 1795244415125921703
+    },
+    {
+      "path": "station=station-C/orphan/part-orphan.parquet",
+      "size": 498,
+      "mtime_ns": 1795244415126612389
+    },
+    {
+      "path": "station=station-D/date=2026-01-01/part-000.parquet",
+      "size": 490,
+      "mtime_ns": 1795244415126951764
+    },
+    {
+      "path": "station=station-D/date=2026-01-02/part-000.parquet",
+      "size": 490,
+      "mtime_ns": 1795244415127294668
+    }
+  ]
+}

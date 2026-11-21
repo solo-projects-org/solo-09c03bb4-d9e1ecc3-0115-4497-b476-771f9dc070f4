@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# 本地样例数据（由 scripts/generate_sample.py 生成）
+/data/archive/**
+/data/manifest/**
+!/data/archive/.gitkeep
+!/data/manifest/.gitkeep

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PM2.5 Parquet 档案读取计划</title>
+<style>
+  :root { --border:#d0d7de; --bg:#f6f8fa; --keep:#1a7f37; --exclude:#cf222e;
+          --warn:#9a6700; --blue:#0969da; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Segoe UI", "PingFang SC",
+         "Microsoft YaHei", sans-serif; color:#1f2328; background:var(--bg); }
+  header { background:#24292f; color:#fff; padding:14px 24px; }
+  header h1 { margin:0; font-size:18px; }
+  header p { margin:4px 0 0; font-size:12px; color:#b6c2cf; }
+  main { max-width:1180px; margin:20px auto; padding:0 16px; display:grid;
+         grid-template-columns: 320px 1fr; gap:18px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background:#fff; border:1px solid var(--border); border-radius:8px; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; }
+  label { display:block; font-size:12px; color:#57606a; margin:10px 0 4px; }
+  select, input { width:100%; padding:7px 9px; border:1px solid var(--border);
+                  border-radius:6px; font-size:13px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .check { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:13px; }
+  .check input { width:auto; }
+  button { margin-top:14px; width:100%; padding:9px; border:0; border-radius:6px;
+           background:var(--blue); color:#fff; font-size:14px; cursor:pointer; }
+  button.secondary { background:#6e7781; }
+  button:hover { filter:brightness(1.08); }
+  .snap { font-size:12px; padding:8px 10px; border-radius:6px; margin-bottom:12px;
+          word-break:break-all; background:var(--bg); border:1px solid var(--border); }
+  .snap b { color:var(--blue); }
+  .snap.stale { border-color:var(--exclude); background:#ffebe9; }
+  .snap.fresh { border-color:var(--keep); background:#dafbe1; }
+  .stats { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .stat { flex:1; min-width:120px; background:var(--bg); border:1px solid var(--border);
+          border-radius:6px; padding:10px; }
+  .stat .v { font-size:20px; font-weight:600; }
+  .stat .k { font-size:11px; color:#57606a; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border);
+           vertical-align:top; }
+  th { background:var(--bg); position:sticky; top:0; }
+  .tag { display:inline-block; padding:2px 7px; border-radius:10px; font-size:11px;
+         font-weight:600; white-space:nowrap; }
+  .tag.keep { background:#dafbe1; color:var(--keep); }
+  .tag.exclude { background:#ffebe9; color:var(--exclude); }
+  .tag.status-ok { background:#dafbe1; color:var(--keep); }
+  .tag.status-bad { background:#fff8c5; color:var(--warn); }
+  .reasons { margin:2px 0 0; padding-left:16px; color:#57606a; }
+  .reasons li { margin:1px 0; }
+  .notes { margin-top:10px; font-size:12px; color:var(--warn); }
+  .muted { color:#57606a; font-size:12px; }
+  .scroll { max-height:560px; overflow:auto; border:1px solid var(--border); border-radius:6px; }
+  .err { background:#ffebe9; border:1px solid var(--exclude); color:var(--exclude);
+         padding:10px; border-radius:6px; font-size:13px; margin-bottom:10px; }
+  details { margin-top:8px; }
+  summary { cursor:pointer; font-size:12px; color:var(--blue); }
+  code { background:var(--bg); padding:1px 4px; border-radius:4px; font-size:11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PM2.5 Parquet 档案读取计划生成器</h1>
+  <p>仅读取 Parquet footer / 行组统计（min/max/null_count），不扫描数据行；统计缺失或损坏时保守保留，计划绑定档案快照。</p>
+</header>
+<main>
+  <section class="card">
+    <h2>查询条件</h2>
+    <div id="snap" class="snap">快照加载中…</div>
+    <label>站点（可多选，留空=全部）</label>
+    <select id="stations" multiple size="5"></select>
+    <div class="row2">
+      <div><label>起始日期（含）</label><input type="date" id="dateFrom" /></div>
+      <div><label>结束日期（含）</label><input type="date" id="dateTo" /></div>
+    </div>
+    <div class="row2">
+      <div><label>PM2.5 下界 μg/m³</label><input type="number" step="any" id="pmMin" placeholder="如 35" /></div>
+      <div><label>PM2.5 上界 μg/m³</label><input type="number" step="any" id="pmMax" placeholder="如 200" /></div>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="includeNulls" checked />
+      <label for="includeNulls" style="margin:0">包含缺测（null）记录</label>
+    </div>
+    <button id="btnPlan">生成读取计划</button>
+    <button id="btnVerify" class="secondary">核对当前计划快照是否仍有效</button>
+    <button id="btnPreview" class="secondary">预览执行（DuckDB 实读保留文件）</button>
+    <p class="muted" style="margin-top:10px">
+      超标判定参考：中国 GB 3095 二级日均限值 75 μg/m³，可按需自行输入区间。
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>计划结果</h2>
+    <div id="error"></div>
+    <div id="summary" style="display:none">
+      <div class="stats">
+        <div class="stat"><div class="v" id="stKept">0</div><div class="k">保留文件</div></div>
+        <div class="stat"><div class="v" id="stExcluded">0</div><div class="k">排除文件</div></div>
+        <div class="stat"><div class="v" id="stBytes">0</div><div class="k">计划字节数</div></div>
+        <div class="stat"><div class="v" id="stTotal">0</div><div class="k">档案文件总数</div></div>
+      </div>
+      <div id="notes"></div>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>结论</th><th>文件 / 分区</th><th>min</th><th>max</th><th>null数</th>
+            <th>行数</th><th>统计状态</th><th>字节</th><th>保留 / 排除原因</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <details>
+        <summary>查看保留文件清单（kept_files）</summary>
+        <pre id="keptList" class="muted"></pre>
+      </details>
+      <details id="previewBox" style="display:none">
+        <summary>DuckDB 预览读取结果</summary>
+        <div id="previewContent"></div>
+      </details>
+    </div>
+    <p id="placeholder" class="muted">设置条件后点击“生成读取计划”。</p>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let currentSnapshot = null;
+let planSnapshotId = null;
+
+function fmtBytes(n) {
+  if (n === 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), u.length - 1);
+  return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + " " + u[i];
+}
+
+async function loadSnapshot() {
+  const r = await fetch("/api/snapshot");
+  if (!r.ok) throw new Error("快照接口失败: " + r.status);
+  currentSnapshot = await r.json();
+  $("snap").className = "snap fresh";
+  $("snap").innerHTML = `当前快照 <b>${currentSnapshot.snapshot_id}</b><br>` +
+    `来源: ${currentSnapshot.source === "manifest" ? "清单文件" : "目录扫描"} · ` +
+    `${currentSnapshot.file_count} 个文件 · ${fmtBytes(currentSnapshot.total_bytes)}`;
+  return currentSnapshot;
+}
+
+async function loadStations() {
+  const s = await loadSnapshot();
+  const sel = $("stations");
+  sel.innerHTML = "";
+  // 站点全集来自计划接口（无筛选条件），保证与档案内容一致
+  const r = await fetch("/api/plan", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"
+  });
+  const plan = await r.json();
+  for (const st of plan.available_stations) {
+    const opt = document.createElement("option");
+    opt.value = st; opt.textContent = st;
+    sel.appendChild(opt);
+  }
+}
+
+function collectRequest(bindSnapshot) {
+  const stations = Array.from($("stations").selectedOptions).map(o => o.value);
+  const body = {
+    stations: stations.length ? stations : null,
+    date_from: $("dateFrom").value || null,
+    date_to: $("dateTo").value || null,
+    pm25_min: $("pmMin").value === "" ? null : parseFloat($("pmMin").value),
+    pm25_max: $("pmMax").value === "" ? null : parseFloat($("pmMax").value),
+    include_nulls: $("includeNulls").checked,
+  };
+  if (bindSnapshot && planSnapshotId) body.expected_snapshot_id = planSnapshotId;
+  return body;
+}
+
+function renderPlan(plan) {
+  planSnapshotId = plan.snapshot_id;
+  $("error").innerHTML = "";
+  $("summary").style.display = "block";
+  $("placeholder").style.display = "none";
+  $("stKept").textContent = plan.kept_count;
+  $("stExcluded").textContent = plan.excluded_count;
+  $("stBytes").textContent = fmtBytes(plan.planned_bytes);
+  $("stTotal").textContent = plan.total_files;
+  $("notes").innerHTML = plan.notes.length
+    ? '<div class="notes">⚠ ' + plan.notes.join("<br>⚠ ") + "</div>" : "";
+  $("keptList").textContent = plan.kept_files.join("\n") || "(空)";
+
+  const bad = new Set(["no_stats", "unreadable", "missing_column"]);
+  $("rows").innerHTML = plan.files.map(f => `
+    <tr>
+      <td><span class="tag ${f.decision === "KEEP" ? "keep" : "exclude"}">${f.decision}</span></td>
+      <td><code>${f.path}</code><br><span class="muted">${f.station ?? "—"} / ${f.date ?? "—"}${f.exists ? "" : " · 文件缺失"}</span></td>
+      <td>${f.pm25_min ?? "—"}</td><td>${f.pm25_max ?? "—"}</td>
+      <td>${f.null_count ?? "—"}</td><td>${f.row_count ?? "—"}</td>
+      <td><span class="tag ${bad.has(f.stats_status) ? "status-bad" : "status-ok"}">${f.stats_status}</span></td>
+      <td>${fmtBytes(f.size_bytes)}</td>
+      <td><ul class="reasons">${f.reasons.map(x => `<li>${x}</li>`).join("")}</ul></td>
+    </tr>`).join("");
+}
+
+async function showError(r) {
+  let detail;
+  try { detail = (await r.json()).detail; } catch { detail = r.statusText; }
+  let msg = typeof detail === "string" ? detail : JSON.stringify(detail);
+  if (detail && detail.error === "STALE_SNAPSHOT") {
+    msg = `快照已失效：计划绑定 ${detail.expected_snapshot_id}，当前为 ${detail.current_snapshot_id}。请重新生成计划。`;
+    $("snap").className = "snap stale";
+  }
+  $("error").innerHTML = `<div class="err">HTTP ${r.status}：${msg}</div>`;
+}
+
+$("btnPlan").addEventListener("click", async () => {
+  const r = await fetch("/api/plan", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(collectRequest(false)),
+  });
+  if (r.ok) { renderPlan(await r.json()); await loadSnapshot(); }
+  else await showError(r);
+});
+
+$("btnVerify").addEventListener("click", async () => {
+  if (!planSnapshotId) { $("error").innerHTML = '<div class="err">请先生成计划</div>'; return; }
+  const r = await fetch("/api/plan/verify", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({snapshot_id: planSnapshotId}),
+  });
+  const v = await r.json();
+  $("snap").className = "snap " + (v.valid ? "fresh" : "stale");
+  $("snap").innerHTML = (v.valid ? "✅ " : "⛔ ") + v.message +
+    `<br>计划快照 <b>${planSnapshotId}</b> · 当前快照 <b>${v.current_snapshot_id}</b>`;
+});
+
+$("btnPreview").addEventListener("click", async () => {
+  const r = await fetch("/api/plan/preview", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(collectRequest(true)),
+  });
+  if (!r.ok) return showError(r);
+  const p = await r.json();
+  $("previewBox").style.display = "block";
+  const head = `<p class="muted">快照有效: ${p.valid_snapshot} · 读取文件 ${p.files_read} 个 · 返回 ${p.row_count} 行</p>`;
+  const table = p.rows.length ? `<table><thead><tr><th>站点</th><th>日期</th><th>文件</th><th>pm25</th></tr></thead>` +
+    `<tbody>${p.rows.map(x => `<tr><td>${x.station ?? "—"}</td><td>${x.date ?? "—"}</td><td><code>${x.source_file}</code></td><td>${x.pm25 === null ? "null" : x.pm25}</td></tr>`).join("")}</tbody></table>` : "";
+  const notes = p.notes.length ? `<div class="notes">⚠ ${p.notes.join("<br>⚠ ")}</div>` : "";
+  $("previewContent").innerHTML = head + table + notes;
+});
+
+loadStations().catch(e => {
+  $("snap").className = "snap stale";
+  $("snap").textContent = "快照加载失败：" + e.message;
+});
+</script>
+</body>
+</html>
