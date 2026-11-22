@@ -23,10 +23,16 @@ class Settings:
     preview_max_files: int
     # 单文件元数据缓存上限（按路径缓存 footer 解析结果）
     meta_cache_size: int
+    # 上次成功名单/对应快照的持久化目录（重启后可继续查看）
+    sample_state_dir: Path = Path(__file__).resolve().parents[2] / "data" / "state"
+    # 单次更新允许实读的文件数上限：防止一次归档更正触发全量重读
+    sample_max_incremental_files: int = 256
 
     @staticmethod
     def from_env() -> "Settings":
         manifest_raw = os.environ.get("PM25_MANIFEST_PATH", "").strip()
+        state_raw = os.environ.get("PM25_STATE_DIR", "").strip()
+        default_state = Path(__file__).resolve().parents[2] / "data" / "state"
         return Settings(
             archive_dir=_env_path(
                 "PM25_ARCHIVE_DIR", Path(__file__).resolve().parents[2] / "data" / "archive"
@@ -35,4 +41,10 @@ class Settings:
             pm25_column=os.environ.get("PM25_COLUMN", "pm25"),
             preview_max_files=int(os.environ.get("PM25_PREVIEW_MAX_FILES", "50")),
             meta_cache_size=int(os.environ.get("PM25_META_CACHE_SIZE", "4096")),
+            sample_state_dir=(
+                Path(state_raw).expanduser().resolve() if state_raw else default_state.resolve()
+            ),
+            sample_max_incremental_files=int(
+                os.environ.get("PM25_SAMPLE_MAX_INCREMENTAL_FILES", "256")
+            ),
         )

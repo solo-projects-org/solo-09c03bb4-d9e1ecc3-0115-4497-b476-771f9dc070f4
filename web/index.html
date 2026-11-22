@@ -58,14 +58,50 @@
   details { margin-top:8px; }
   summary { cursor:pointer; font-size:12px; color:var(--blue); }
   code { background:var(--bg); padding:1px 4px; border-radius:4px; font-size:11px; }
+  /* ---- 标签页 ---- */
+  .tabs { max-width:1180px; margin:16px auto 0; padding:0 16px; display:flex; gap:8px; }
+  .tabs button { width:auto; margin:0; padding:8px 16px; background:#fff; color:#57606a;
+                 border:1px solid var(--border); border-bottom:0; border-radius:8px 8px 0 0;
+                 font-size:13px; }
+  .tabs button.active { background:var(--blue); color:#fff; border-color:var(--blue); }
+  /* ---- 抽签名单 ---- */
+  .badge { display:inline-block; padding:1px 6px; border-radius:10px; font-size:11px;
+           font-weight:600; white-space:nowrap; }
+  .badge.added { background:#dafbe1; color:var(--keep); }
+  .badge.withdrawn { background:#ffebe9; color:var(--exclude); }
+  .badge.same { background:var(--bg); color:#57606a; }
+  .badge.up { background:#ddf4ff; color:var(--blue); }
+  .kind { font-weight:600; }
+  .kind.exceed { color:var(--exclude); }
+  .kind.missing { color:var(--warn); }
+  .diffbox { border:1px solid var(--border); border-radius:6px; padding:10px 12px;
+             margin:10px 0; background:#fff; }
+  .diffbox h3 { margin:0 0 3px; font-size:13px; }
+  .mini { width:100%; border-collapse:collapse; font-size:12px; }
+  .mini th, .mini td { padding:4px 6px; border-bottom:1px solid var(--border); text-align:left; }
+  .mini th { background:var(--bg); }
+  .att { font-size:12px; padding:7px 9px; border-radius:6px; margin:8px 0;
+         background:var(--bg); border:1px solid var(--border); }
+  .att.bad { background:#ffebe9; border-color:var(--exclude); color:var(--exclude); }
+  .att.good { background:#dafbe1; border-color:var(--keep); color:var(--keep); }
+  table.samples td { vertical-align:top; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; }
+  .snapmeta { font-size:11px; color:#57606a; word-break:break-all; }
+  .listbox { max-height:220px; overflow:auto; }
+  .rowbtns { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .rowbtns button { margin-top:8px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>PM2.5 Parquet 档案读取计划生成器</h1>
-  <p>仅读取 Parquet footer / 行组统计（min/max/null_count），不扫描数据行；统计缺失或损坏时保守保留，计划绑定档案快照。</p>
+  <h1>PM2.5 Parquet 档案读取计划 / 月报抽查名单</h1>
+  <p>读取计划只读 footer 统计；抽查名单实读档案记录，按种子确定性抽签，并随清单换版增量更新。</p>
 </header>
-<main>
+<div class="tabs">
+  <button id="tabBtnPlan" class="active" data-tab="plan">读取计划</button>
+  <button id="tabBtnSample" data-tab="sample">月报抽查名单</button>
+</div>
+<main id="tabPlan">
   <section class="card">
     <h2>查询条件</h2>
     <div id="snap" class="snap">快照加载中…</div>
@@ -121,6 +157,82 @@
       </details>
     </div>
     <p id="placeholder" class="muted">设置条件后点击“生成读取计划”。</p>
+  </section>
+</main>
+
+<main id="tabSample" style="display:none">
+  <section class="card">
+    <h2>抽查条件</h2>
+    <div id="sSnap" class="snap">快照加载中…</div>
+    <label>站点</label>
+    <select id="sStation"></select>
+    <div class="row2">
+      <div><label>抽查月份</label><input type="month" id="sMonth" /></div>
+      <div><label>PM2.5 超标阈值</label><input id="sThreshold" value="≥ 35 μg/m³" disabled /></div>
+    </div>
+    <div class="row2">
+      <div><label>超标类名额</label><input type="number" min="0" id="sExceedQuota" value="3" /></div>
+      <div><label>缺测类名额</label><input type="number" min="0" id="sMissingQuota" value="2" /></div>
+    </div>
+    <div class="row2">
+      <div><label>超标类种子</label><input id="sExceedSeed" placeholder="如 2026-01-A" /></div>
+      <div><label>缺测类种子</label><input id="sMissingSeed" placeholder="留空=沿用左侧种子" /></div>
+    </div>
+    <div class="rowbtns">
+      <button id="btnSampleGen">生成名单</button>
+      <button id="btnSampleUpdate" class="secondary">按原条件更新</button>
+    </div>
+    <button id="btnSampleLoad" class="secondary">查看该站点月份的上次成功名单</button>
+    <button id="btnSampleAudit" class="secondary">全量重抽核对当前名单</button>
+    <p class="muted" style="margin-top:10px">
+      两类各自等概率无放回抽取，不足名额则全取；抽签键由种子 + 文件相对路径/大小/修改时间/行号固定。
+      更新只实读新增或换版文件，结果须与按当前清单全量抽样逐条一致。
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>名单结果</h2>
+    <div id="sError"></div>
+    <div id="sAttempt"></div>
+    <div id="sEmpty" class="muted">选择站点与月份，生成或查看名单。</div>
+    <div id="sResult" style="display:none">
+      <div id="sSummary" class="snap"></div>
+      <div class="stats">
+        <div class="stat"><div class="v" id="sExceedCount">0</div><div class="k">超标类入选</div></div>
+        <div class="stat"><div class="v" id="sExceedEligible">0</div><div class="k">超标类合格记录</div></div>
+        <div class="stat"><div class="v" id="sMissingCount">0</div><div class="k">缺测类入选</div></div>
+        <div class="stat"><div class="v" id="sMissingEligible">0</div><div class="k">缺测类合格记录</div></div>
+      </div>
+      <div id="sNotes"></div>
+      <div id="sDiff"></div>
+
+      <h3 style="font-size:14px;margin:16px 0 8px">超标类名单</h3>
+      <div class="scroll"><table class="samples">
+        <thead><tr><th>#</th><th>读数</th><th>文件相对路径</th><th>清单大小</th>
+          <th>清单修改时间 (ns)</th><th>文件内行号</th><th>抽签键（前16位）</th><th>相对上次</th></tr></thead>
+        <tbody id="sExceedRows"></tbody>
+      </table></div>
+
+      <h3 style="font-size:14px;margin:16px 0 8px">缺测类名单</h3>
+      <div class="scroll"><table class="samples">
+        <thead><tr><th>#</th><th>读数</th><th>文件相对路径</th><th>清单大小</th>
+          <th>清单修改时间 (ns)</th><th>文件内行号</th><th>抽签键（前16位）</th><th>相对上次</th></tr></thead>
+        <tbody id="sMissingRows"></tbody>
+      </table></div>
+
+      <details>
+        <summary>逐文件抽签证据（每个文件每类保留的候选数 ≤ 名额）</summary>
+        <div class="scroll"><table class="mini" style="margin-top:8px">
+          <thead><tr><th>文件</th><th>类别</th><th>行数</th><th>合格行</th><th>保留候选</th>
+            <th>清单大小</th><th>清单修改时间 (ns)</th></tr></thead>
+          <tbody id="sFiles"></tbody>
+        </table></div>
+      </details>
+      <details>
+        <summary>名单对应的快照（重启后仍可查看）</summary>
+        <pre id="sSnapJson" class="snapmeta" style="white-space:pre-wrap"></pre>
+      </details>
+    </div>
   </section>
 </main>
 
@@ -222,7 +334,6 @@ $("btnPlan").addEventListener("click", async () => {
   if (r.ok) { renderPlan(await r.json()); await loadSnapshot(); }
   else await showError(r);
 });
-
 $("btnVerify").addEventListener("click", async () => {
   if (!planSnapshotId) { $("error").innerHTML = '<div class="err">请先生成计划</div>'; return; }
   const r = await fetch("/api/plan/verify", {
@@ -254,6 +365,296 @@ loadStations().catch(e => {
   $("snap").className = "snap stale";
   $("snap").textContent = "快照加载失败：" + e.message;
 });
+
+/* ==================== 月报抽查名单 ==================== */
+const KIND_LABEL = {exceed: "超标", missing: "缺测"};
+let sampleStationsLoaded = false;
+
+function esc(v) {
+  return String(v).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+function fmtMtime(v) { return v === null || v === undefined ? "—" : esc(v); }
+
+function sampleForm() {
+  return {
+    station: $("sStation").value,
+    month: $("sMonth").value,
+    exceed_quota: parseInt($("sExceedQuota").value || "0", 10),
+    missing_quota: parseInt($("sMissingQuota").value || "0", 10),
+    exceed_seed: $("sExceedSeed").value,
+    missing_seed: $("sMissingSeed").value || null,
+  };
+}
+
+async function loadSampleSnapshot() {
+  try {
+    const r = await fetch("/api/snapshot");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const s = await r.json();
+    $("sSnap").className = "snap fresh";
+    $("sSnap").innerHTML = `当前快照 <b>${esc(s.snapshot_id)}</b><br>` +
+      `来源: ${s.source === "manifest" ? "清单文件" : "目录扫描"} · ${s.file_count} 个文件 · ${fmtBytes(s.total_bytes)}<br>` +
+      `<span class="snapmeta">${esc(s.manifest_path || "")}</span>`;
+    return s;
+  } catch (e) {
+    $("sSnap").className = "snap stale";
+    $("sSnap").textContent = "快照加载失败（抽查名单需要清单模式）：" + e.message;
+    return null;
+  }
+}
+
+async function loadSampleStations() {
+  const sel = $("sStation");
+  const keep = sel.value;
+  sel.innerHTML = "";
+  try {
+    const r = await fetch("/api/plan", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}",
+    });
+    const plan = await r.json();
+    for (const st of plan.available_stations) {
+      const opt = document.createElement("option");
+      opt.value = st; opt.textContent = st;
+      sel.appendChild(opt);
+    }
+  } catch { /* 快照不可用时保持空列表 */ }
+  if (keep) sel.value = keep;
+  sampleStationsLoaded = true;
+}
+
+function sampleError(detail, status) {
+  if (!detail || typeof detail === "string") {
+    return `<div class="err">HTTP ${status}：${esc(detail || "请求失败")}</div>`;
+  }
+  const codes = (detail.reason_codes || []).map(c => `<code>${esc(c)}</code>`).join(" ");
+  let last = "";
+  if (detail.last_success_snapshot_id) {
+    last = `<div class="att good">上次成功名单已保留：快照 <b>${esc(detail.last_success_snapshot_id)}</b>` +
+      ` · 生成于 ${esc(detail.last_success_generated_at || "—")}</div>`;
+  } else {
+    last = `<div class="att bad">尚无可回退的上次成功名单</div>`;
+  }
+  const cur = detail.current_snapshot_id
+    ? `<div class="snapmeta">当前快照：${esc(detail.current_snapshot_id)}</div>` : "";
+  const details = (detail.details || []).length
+    ? `<ul>${detail.details.map(d => `<li class="mono">${esc(d)}</li>`).join("")}</ul>` : "";
+  return `<div class="err"><b>HTTP ${status} · ${esc(detail.error || "失败")}</b>：${esc(detail.message || "")}<br>${codes}
+    ${details}${last}${cur}</div>`;
+}
+
+function sampleTableRows(list, diffAdded) {
+  const added = new Set((diffAdded || []).map(c => locKey(c)));
+  if (!list.length) return `<tr><td colspan="8" class="muted">（该类无样本）</td></tr>`;
+  return list.map((c, i) => {
+    const tag = added.has(locKey(c))
+      ? '<span class="badge added">新增</span>'
+      : '<span class="badge same">延续/保留</span>';
+    return `<tr>
+      <td>${i + 1}</td>
+      <td>${c.value === null ? "null" : c.value}</td>
+      <td><code>${esc(c.path)}</code></td>
+      <td>${c.size}</td>
+      <td class="mono">${fmtMtime(c.mtime_ns)}</td>
+      <td>${c.row_number}</td>
+      <td class="mono" title="${esc(c.draw_key)}">${esc(c.draw_key.slice(0, 16))}…</td>
+      <td>${tag}</td></tr>`;
+  }).join("");
+}
+function locKey(c) { return `${c.path}|${c.size}|${c.mtime_ns}|${c.row_number}`; }
+
+function renderDiffBox(diff) {
+  if (!diff) return "";
+  const blocks = [];
+  for (const kind of ["exceed", "missing"]) {
+    const add = diff.added[kind] || [], wd = diff.withdrawn[kind] || [];
+    if (!add.length && !wd.length) continue;
+    const rows = (items, cls) => items.map(c => `
+      <tr><td><span class="badge ${cls}">${cls === "added" ? "新增" : "撤回"}</span></td>
+        <td>${c.value === null ? "null" : c.value}</td>
+        <td><code>${esc(c.path)}</code></td><td>${c.size}</td>
+        <td class="mono">${fmtMtime(c.mtime_ns)}</td><td>${c.row_number}</td></tr>`).join("");
+    blocks.push(`<div class="diffbox"><h3>${KIND_LABEL[kind]}类：新增 ${add.length} 条 / 撤回 ${wd.length} 条</h3>
+      <table class="mini"><thead><tr><th>变化</th><th>读数</th><th>文件</th><th>大小</th><th>修改时间(ns)</th><th>行号</th></tr></thead>
+      <tbody>${rows(add, "added")}${rows(wd, "withdrawn")}</tbody></table></div>`);
+  }
+  if (!blocks.length) {
+    blocks.push('<div class="diffbox"><span class="badge same">无变化</span> 与上次成功名单相比没有新增或撤回的样本。</div>');
+  }
+  const meta = `<p class="muted">本次实读文件 ${diff.read_files.length} 个；复用未变文件 ${diff.reused_files.length} 个
+    ${diff.unchanged_snapshot ? "（清单未变化）" : ""}。</p>`;
+  return `<h3 style="font-size:14px;margin:16px 0 4px">相对上次成功名单的变化</h3>${meta}${blocks.join("")}`;
+}
+
+function renderSample(payload, diffOverride) {
+  const s = payload.sample || payload;
+  const diff = diffOverride !== undefined ? diffOverride : payload.diff;
+  $("sError").innerHTML = "";
+  $("sEmpty").style.display = "none";
+  $("sResult").style.display = "block";
+
+  $("sSummary").className = "snap fresh";
+  $("sSummary").innerHTML =
+    `站点 <b>${esc(s.spec.station)}</b> · 月份 <b>${esc(s.spec.month)}</b> · ` +
+    `本轮来源 <b>${s.source === "update" ? "增量更新" : s.source === "update_noop" ? "更新（清单未变）" : "全量生成"}</b><br>` +
+    `名单快照 <b>${esc(s.snapshot_id)}</b> · 生成于 ${esc(s.generated_at)}` +
+    (s.previous_snapshot_id ? ` · 上次快照 ${esc(s.previous_snapshot_id)}` : "") +
+    `<br><span class="snapmeta">阈值 PM2.5 ≥ 35 μg/m³（超标） / null（缺测）；名额上限：` +
+    `超标 ${s.quotas.exceed}、缺测 ${s.quotas.missing}</span>`;
+
+  $("sExceedCount").textContent = (s.candidates.exceed || []).length;
+  $("sExceedEligible").textContent = s.eligible_counts.exceed ?? 0;
+  $("sMissingCount").textContent = (s.candidates.missing || []).length;
+  $("sMissingEligible").textContent = s.eligible_counts.missing ?? 0;
+  $("sNotes").innerHTML = (s.notes || []).length
+    ? '<div class="notes">⚠ ' + s.notes.map(esc).join("<br>⚠ ") + "</div>" : "";
+
+  $("sExceedRows").innerHTML = sampleTableRows(
+    s.candidates.exceed || [], (diff && diff.added.exceed) || []);
+  $("sMissingRows").innerHTML = sampleTableRows(
+    s.candidates.missing || [], (diff && diff.added.missing) || []);
+  $("sDiff").innerHTML = renderDiffBox(diff);
+
+  $("sFiles").innerHTML = (s.files || []).map(f => `
+    <tr><td><code>${esc(f.path)}</code></td>
+      <td class="kind ${f.kind}">${KIND_LABEL[f.kind] || f.kind}</td>
+      <td>${f.row_count}</td><td>${f.eligible_rows}</td><td>${f.kept_candidates}</td>
+      <td>${f.size}</td><td class="mono">${fmtMtime(f.mtime_ns)}</td></tr>`).join("")
+    || `<tr><td colspan="7" class="muted">（无文件）</td></tr>`;
+  $("sSnapJson").textContent = JSON.stringify(s.snapshot, null, 2);
+}
+
+function renderAttempt(last) {
+  if (!last || !last.outcome) { $("sAttempt").innerHTML = ""; return; }
+  if (last.outcome === "success") {
+    $("sAttempt").innerHTML =
+      `<div class="att good">最近一次尝试：成功（${esc(last.at)}）</div>`;
+  } else {
+    const codes = (last.reason_codes || []).map(c => `<code>${esc(c)}</code>`).join(" ");
+    const details = (last.details || []).length
+      ? `<ul>${last.details.map(d => `<li class="mono">${esc(d)}</li>`).join("")}</ul>` : "";
+    $("sAttempt").innerHTML =
+      `<div class="att bad">最近一次尝试：失败（${esc(last.at)}）· ${codes}<br>${esc(last.message || "")}${details}</div>`;
+  }
+}
+
+function renderLastAttemptOnly(payload) {
+  const last = payload && payload.last_attempt;
+  if (!last || last.outcome !== "failed") return "";
+  const codes = (last.reason_codes || []).map(c => `<code>${esc(c)}</code>`).join(" ");
+  const details = (last.details || []).length
+    ? `<ul>${last.details.map(d => `<li class="mono">${esc(d)}</li>`).join("")}</ul>` : "";
+  return `<div class="att bad">最近一次尝试失败（${esc(last.at)}）· ${codes}<br>` +
+    `${esc(last.message || "")}${details}</div>`;
+}
+
+async function sampleCall(url, body, method = "POST") {
+  $("sError").innerHTML = "";
+  const r = await fetch(url, {
+    method, headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let detail; try { detail = (await r.json()).detail; } catch { detail = null; }
+    const html = sampleError(detail, r.status);
+    $("sError").innerHTML = html;
+    // 失败后仍展示上次成功名单（保留的名单不会被清空），再恢复失败提示
+    if ($("sStation").value && $("sMonth").value) {
+      await loadLastSample(true);
+      $("sError").innerHTML = html;
+    }
+    await loadSampleSnapshot();
+    return null;
+  }
+  return r.json();
+}
+
+async function loadLastSample(quiet = false) {
+  const station = $("sStation").value, month = $("sMonth").value;
+  if (!station || !month) {
+    if (!quiet) $("sError").innerHTML = '<div class="err">请先选择站点与月份</div>';
+    return;
+  }
+  const r = await fetch(`/api/samples/last?station=${encodeURIComponent(station)}&month=${encodeURIComponent(month)}`);
+  if (!r.ok) {
+    if (!quiet) {
+      let detail; try { detail = (await r.json()).detail; } catch { detail = null; }
+      $("sError").innerHTML = sampleError(detail, r.status);
+      $("sResult").style.display = "none";
+      $("sEmpty").style.display = "block";
+      $("sEmpty").textContent = "该站点月份还没有已保存的名单。";
+    }
+    return;
+  }
+  const payload = await r.json();
+  // 回填表单，便于按原条件更新
+  $("sStation").value = payload.sample.spec.station;
+  $("sMonth").value = payload.sample.spec.month;
+  $("sExceedQuota").value = payload.sample.spec.exceed_quota;
+  $("sMissingQuota").value = payload.sample.spec.missing_quota;
+  $("sExceedSeed").value = payload.sample.spec.exceed_seed;
+  $("sMissingSeed").value = payload.sample.spec.missing_seed === payload.sample.spec.exceed_seed
+    ? "" : payload.sample.spec.missing_seed;
+  renderSample(payload);
+  renderAttempt(payload.last_attempt);
+  // 失败留痕：上次成功名单仍原样展示
+  if (payload.last_attempt && payload.last_attempt.outcome === "failed") {
+    $("sAttempt").innerHTML += renderLastAttemptOnly(payload);
+  }
+  if (!payload.snapshot_still_current) {
+    $("sSummary").className = "snap stale";
+    $("sSummary").innerHTML +=
+      `<br><b>⚠ 生成该名单的快照 ${esc(payload.sample.snapshot_id)} 已不是当前快照 ` +
+      `（当前 ${esc(payload.current_snapshot_id || "不可用")}）；名单展示的是上次成功结果，` +
+      `如需最新结果请点“按原条件更新”。</b>`;
+  }
+  $("sSnap").className = "snap " + (payload.snapshot_still_current ? "fresh" : "stale");
+}
+
+$("btnSampleGen").addEventListener("click", async () => {
+  const data = await sampleCall("/api/samples", sampleForm());
+  if (!data) return;
+  renderSample(data, data.diff);
+  $("sAttempt").innerHTML = `<div class="att good">${esc(data.message)}</div>`;
+  await loadSampleSnapshot();
+  await loadLastSample(true);
+});
+
+$("btnSampleUpdate").addEventListener("click", async () => {
+  const data = await sampleCall("/api/samples/update", sampleForm());
+  if (!data) return;
+  renderSample(data, data.diff);
+  $("sAttempt").innerHTML = `<div class="att good">${esc(data.message)}</div>`;
+  await loadSampleSnapshot();
+});
+
+$("btnSampleLoad").addEventListener("click", () => loadLastSample(false));
+
+$("btnSampleAudit").addEventListener("click", async () => {
+  const data = await sampleCall("/api/samples/audit", sampleForm());
+  if (!data) return;
+  const cls = data.equivalent ? "good" : "bad";
+  const diffs = data.differences.length
+    ? `<ul>${data.differences.map(d => `<li>${esc(d)}</li>`).join("")}</ul>` : "";
+  $("sAttempt").innerHTML =
+    `<div class="att ${cls}"><b>全量重抽核对：${data.equivalent ? "逐条一致 ✅" : "不一致 ⛔"}</b>` +
+    ` · 名单快照 ${esc(data.sample_snapshot_id)} · 当前快照 ${esc(data.full_snapshot_id)}` +
+    ` · 范围内行数约 ${data.rows_read} ${diffs}</div>`;
+});
+
+function switchTab(tab) {
+  $("tabPlan").style.display = tab === "plan" ? "" : "none";
+  $("tabSample").style.display = tab === "sample" ? "" : "none";
+  $("tabBtnPlan").classList.toggle("active", tab === "plan");
+  $("tabBtnSample").classList.toggle("active", tab === "sample");
+  if (tab === "sample") {
+    if (!sampleStationsLoaded) loadSampleStations();
+    loadSampleSnapshot();
+  }
+}
+$("tabBtnPlan").addEventListener("click", () => switchTab("plan"));
+$("tabBtnSample").addEventListener("click", () => switchTab("sample"));
 </script>
 </body>
 </html>

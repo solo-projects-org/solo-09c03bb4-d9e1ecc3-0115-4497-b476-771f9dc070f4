@@ -15,9 +15,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +26,20 @@ from .config import Settings
 from .parquet_meta import FileMeta, extract_file_meta
 
 logger = logging.getLogger(__name__)
+
+
+class ManifestError(ValueError):
+    """清单不可用、内容非法，或在读取过程中被并发替换。"""
+
+
+@dataclass(frozen=True)
+class ManifestInfo:
+    """清单文件本身的版本身份与文件元数据。"""
+
+    path: Path
+    version: str | None
+    size: int
+    mtime_ns: int
 
 
 @dataclass(frozen=True)
@@ -35,9 +50,43 @@ class Snapshot:
     generated_at: str
     archive_dir: Path
     manifest_path: Path | None
+    # 清单声明的 (size, mtime_ns)；扫描模式下为当时实际值
+    declared: dict[str, tuple[int, int]] = field(default_factory=dict)
+    manifest_version: str | None = None
+    manifest_size: int | None = None
+    manifest_mtime_ns: int | None = None
 
     def by_relpath(self) -> dict[str, FileMeta]:
         return {f.rel_path: f for f in self.files}
+
+    def declared_for(self, rel_path: str) -> tuple[int, int] | None:
+        return self.declared.get(rel_path)
+
+
+def _normalize_rel_path(raw: str) -> str:
+    rel = raw.replace("\\", "/").strip()
+    while rel.startswith("./"):
+        rel = rel[2:]
+    return rel.lstrip("/")
+
+
+def _is_safe_rel_path(rel: str) -> bool:
+    """拒绝绝对路径、.. 穿越与空路径；清单只能指向档案根目录内部。"""
+    if not rel or "\x00" in rel:
+        return False
+    parts = rel.split("/")
+    return all(part not in ("", ".", "..") for part in parts)
+
+
+def _manifest_version(raw: object) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (str, int, float, bool)):
+        return str(raw)
+    try:
+        return json.dumps(raw, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return str(raw)
 
 
 class _LRU:
@@ -83,9 +132,10 @@ class SnapshotStore:
         """返回当前快照；文件系统无变化时复用上次结果（含元数据缓存）。"""
         with self._lock:
             if self._settings.manifest_path is not None:
-                fingerprint, entries = self._read_manifest()
+                fingerprint, entries, manifest_info = self._read_manifest()
             else:
                 fingerprint, entries = self._scan_archive()
+                manifest_info = None
 
             if self._last is not None and fingerprint == self._dir_fingerprint:
                 return self._last
@@ -104,6 +154,10 @@ class SnapshotStore:
                 generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 archive_dir=self._settings.archive_dir,
                 manifest_path=self._settings.manifest_path,
+                declared={rel: (size, mtime) for rel, size, mtime in entries},
+                manifest_version=manifest_info.version if manifest_info else None,
+                manifest_size=manifest_info.size if manifest_info else None,
+                manifest_mtime_ns=manifest_info.mtime_ns if manifest_info else None,
             )
             self._dir_fingerprint = fingerprint
             self._last = snapshot
@@ -123,7 +177,7 @@ class SnapshotStore:
         entries: list[tuple[str, int, int]] = []
         dir_mtimes: list[tuple[str, int]] = []
         if root.exists():
-            for dirpath, dirnames, filenames in __import__("os").walk(root):
+            for dirpath, dirnames, filenames in os.walk(root):
                 dirnames.sort()
                 dir_mtimes.append(
                     (str(Path(dirpath).relative_to(root)),
@@ -149,23 +203,77 @@ class SnapshotStore:
     # ------------------------------------------------------------------ #
     # 清单模式
     # ------------------------------------------------------------------ #
-    def _read_manifest(self) -> tuple[tuple, list[tuple[str, int, int]]]:
+    def _read_manifest(self) -> tuple[tuple, list[tuple[str, int, int]], ManifestInfo]:
+        """读取并严格校验清单；读取期间被替换则拒绝本次结果。
+
+        清单由外部系统以“写临时文件 + os.replace”原子替换。这里额外比较
+        打开前后的 stat，若在读取窗口内发生变化（或内容与 stat 不匹配），
+        视为并发替换并报错，绝不把两个版本的条目混在一起用。
+        """
         mp = self._settings.manifest_path
         assert mp is not None
-        st = mp.stat()  # 清单不存在会抛 FileNotFoundError，由 API 层转 503
+        st_before = mp.stat()  # 清单不存在会抛 FileNotFoundError，由 API 层转 503
         with mp.open("rb") as fh:
-            payload = json.load(fh)
-        raw_entries = payload.get("files", [])
+            raw_bytes = fh.read()
+        st_after = mp.stat()
+        if (st_before.st_size, st_before.st_mtime_ns) != (
+            st_after.st_size, st_after.st_mtime_ns
+        ):
+            raise ManifestError(
+                "清单在读取过程中被替换（读取前 "
+                f"size={st_before.st_size}/mtime_ns={st_before.st_mtime_ns}，读取后 "
+                f"size={st_after.st_size}/mtime_ns={st_after.st_mtime_ns}），"
+                "请重试；本次不会产生混合版本的结果"
+            )
+
+        try:
+            payload = json.loads(raw_bytes)
+        except json.JSONDecodeError:
+            raise
+        if not isinstance(payload, dict):
+            raise ManifestError("清单根节点必须是 JSON 对象")
+        raw_entries = payload.get("files")
+        if raw_entries is None:
+            raise ManifestError("清单缺少 files 数组")
+        if not isinstance(raw_entries, list):
+            raise ManifestError("清单 files 字段必须是数组")
+
         entries: list[tuple[str, int, int]] = []
-        for item in raw_entries:
-            rel = str(item["path"]).replace("\\", "/").lstrip("./")
-            size = int(item.get("size", -1))
-            mtime = int(item.get("mtime_ns", -1))
+        seen: set[str] = set()
+        for idx, item in enumerate(raw_entries):
+            if not isinstance(item, dict):
+                raise ManifestError(f"清单第 {idx} 条不是对象")
+            raw_path = item.get("path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ManifestError(f"清单第 {idx} 条缺少合法的 path")
+            rel = _normalize_rel_path(raw_path)
+            if not _is_safe_rel_path(rel):
+                raise ManifestError(f"清单第 {idx} 条路径非法（禁止绝对路径或 .. 穿越）: {raw_path!r}")
+            if rel in seen:
+                raise ManifestError(f"清单存在重复路径: {rel}")
+            seen.add(rel)
+            try:
+                size = int(item.get("size", -1))
+                mtime = int(item.get("mtime_ns", -1))
+            except (TypeError, ValueError):
+                raise ManifestError(f"清单第 {idx} 条 size/mtime_ns 不是整数: {rel}") from None
+            if size < 0 or mtime < 0:
+                raise ManifestError(f"清单第 {idx} 条 size/mtime_ns 缺失或为负: {rel}")
             entries.append((rel, size, mtime))
         entries.sort(key=lambda e: e[0])
-        # 清单文件本身的 mtime/size 也纳入指纹，替换后立刻可感知
-        fingerprint = ("manifest", str(mp), st.st_size, st.st_mtime_ns, tuple(entries))
-        return fingerprint, entries
+
+        info = ManifestInfo(
+            path=mp,
+            version=_manifest_version(payload.get("version")),
+            size=st_after.st_size,
+            mtime_ns=st_after.st_mtime_ns,
+        )
+        # 清单文件本身的大小/mtime 与版本号一并纳入指纹，替换后立刻可感知
+        fingerprint = (
+            "manifest", str(mp), info.size, info.mtime_ns,
+            info.version, tuple(entries),
+        )
+        return fingerprint, entries, info
 
     @staticmethod
     def _compute_id(entries: list[tuple[str, int, int]]) -> str:

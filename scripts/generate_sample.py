@@ -42,6 +42,35 @@ def _write(path: Path, values: list, *, write_stats: bool = True,
     )
 
 
+def _manifest_entries(archive: Path) -> list[dict]:
+    entries = []
+    for path in sorted(archive.rglob("*.parquet")):
+        st = path.stat()
+        entries.append({
+            "path": str(path.relative_to(archive)).replace("\\", "/"),
+            "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
+        })
+    return entries
+
+
+def _write_manifest(manifest: Path, entries: list[dict]) -> None:
+    tmp = manifest.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(
+        {"version": 1, "pm25_column": PM25, "files": entries},
+        ensure_ascii=False, indent=2,
+    ))
+    os.replace(tmp, manifest)
+
+
+def rebuild_manifest(archive: Path, manifest: Path) -> None:
+    """只按磁盘现有文件重建清单（不重写 Parquet）。"""
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    entries = _manifest_entries(archive)
+    _write_manifest(manifest, entries)
+    print(f"清单已按现有 {len(entries)} 个文件原子重建 -> {manifest}")
+
+
 def generate(archive: Path, manifest: Path) -> None:
     archive.mkdir(parents=True, exist_ok=True)
     manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -87,20 +116,8 @@ def generate(archive: Path, manifest: Path) -> None:
     _write(archive / "station=station-D/date=2026-01-02/part-000.parquet", [34.9, 34.9])
 
     # --- 生成清单（真实替换流程请用 os.replace 原子换入） ---------------
-    entries = []
-    for path in sorted(archive.rglob("*.parquet")):
-        st = path.stat()
-        entries.append({
-            "path": str(path.relative_to(archive)).replace("\\", "/"),
-            "size": st.st_size,
-            "mtime_ns": st.st_mtime_ns,
-        })
-    tmp = manifest.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(
-        {"version": 1, "pm25_column": PM25, "files": entries},
-        ensure_ascii=False, indent=2,
-    ))
-    os.replace(tmp, manifest)
+    entries = _manifest_entries(archive)
+    _write_manifest(manifest, entries)
     print(f"已生成 {len(entries)} 个 Parquet 文件 -> {archive}")
     print(f"清单已原子写入 -> {manifest}")
 
@@ -110,7 +127,14 @@ def main() -> None:
     default_root = Path(__file__).resolve().parents[1] / "data"
     ap.add_argument("--archive", type=Path, default=default_root / "archive")
     ap.add_argument("--manifest", type=Path, default=default_root / "manifest" / "manifest.json")
+    ap.add_argument(
+        "--manifest-only", action="store_true",
+        help="不写 Parquet，仅按磁盘现有文件重建清单（用于演示换版）",
+    )
     args = ap.parse_args()
+    if args.manifest_only:
+        rebuild_manifest(args.archive.resolve(), args.manifest.resolve())
+        return
     generate(args.archive.resolve(), args.manifest.resolve())
 
 

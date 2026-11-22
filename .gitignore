@@ -8,5 +8,7 @@ __pycache__/
 # 本地样例数据（由 scripts/generate_sample.py 生成）
 /data/archive/**
 /data/manifest/**
+/data/state/**
 !/data/archive/.gitkeep
 !/data/manifest/.gitkeep
+!/data/state/.gitkeep

@@ -1,16 +1,19 @@
 services:
   pm25-planner:
     build: .
-    image: pm25-planner:1.0.0
+    image: pm25-planner:1.1.0
     container_name: pm25-planner
     ports:
       - "8000:8000"
     environment:
-      # 默认扫描模式；如改用清单模式，指向容器内清单文件即可
       PM25_ARCHIVE_DIR: /data/archive
-      # PM25_MANIFEST_PATH: /data/manifest/manifest.json
+      # 清单模式：抽查名单的“清单换版/文件与清单不符”检测都依赖该配置
+      PM25_MANIFEST_PATH: /data/manifest/manifest.json
       PM25_COLUMN: pm25
       PM25_PREVIEW_MAX_FILES: "50"
+      # 上次成功名单与对应快照的持久化目录（位于共享卷 data/state 下，重启后仍可查看）
+      PM25_STATE_DIR: /data/state
+      PM25_SAMPLE_MAX_INCREMENTAL_FILES: "256"
       # 设为 1 时容器启动自动生成样例数据（仅当档案目录为空）
       GENERATE_SAMPLE: "1"
     volumes:

@@ -118,3 +118,123 @@ class PreviewResponse(BaseModel):
     files_read: int
     rows: list[PreviewRow]
     notes: list[str]
+
+
+# --------------------------------------------------------------------------- #
+# 月报抽查名单
+# --------------------------------------------------------------------------- #
+class SampleSpecRequest(BaseModel):
+    """生成名单的抽样参数。"""
+
+    station: str = Field(..., min_length=1, description="站点分区值，如 station-A")
+    month: str = Field(..., pattern=r"^\d{4}-\d{2}$", description="抽查月份 YYYY-MM")
+    exceed_quota: int = Field(..., ge=0, le=100_000, description="超标类名额")
+    missing_quota: int = Field(..., ge=0, le=100_000, description="缺测类名额")
+    exceed_seed: str = Field(..., min_length=1, max_length=200, description="超标类抽样种子")
+    missing_seed: str | None = Field(
+        default=None, max_length=200,
+        description="缺测类抽样种子；留空时沿用超标类种子（两类仍各自独立抽签）",
+    )
+
+
+class SampleUpdateRequest(SampleSpecRequest):
+    """更新名单沿用原条件；参数必须与上次成功名单一致。"""
+
+
+class SampleCandidateView(BaseModel):
+    kind: Literal["exceed", "missing"]
+    value: float | None = Field(..., description="读数；缺测为 null")
+    path: str = Field(..., description="相对档案根目录的文件路径")
+    size: int = Field(..., description="清单所记文件大小（字节）")
+    mtime_ns: str = Field(..., description="清单所记修改时间（纳秒，十进制字符串，避免 JS 精度丢失）")
+    row_number: int = Field(..., description="文件内行号，从 1 开始")
+    draw_key: str = Field(..., description="抽签键；升序即抽签顺序")
+    station: str
+    month: str
+
+
+class SampleFileView(BaseModel):
+    path: str
+    size: int
+    mtime_ns: str
+    kind: Literal["exceed", "missing"]
+    row_count: int
+    eligible_rows: int
+    kept_candidates: int = Field(..., description="该文件为该类保留的候选数（≤ 名额）")
+
+
+class SampleSpecView(BaseModel):
+    station: str
+    month: str
+    exceed_quota: int
+    missing_quota: int
+    exceed_seed: str
+    missing_seed: str
+
+
+class SampleListResponse(BaseModel):
+    spec: SampleSpecView
+    snapshot_id: str
+    snapshot: dict
+    generated_at: str
+    source: Literal["generate", "update", "update_noop"]
+    previous_snapshot_id: str | None = None
+    candidates: dict[str, list[SampleCandidateView]]
+    eligible_counts: dict[str, int]
+    notes: list[str]
+    files: list[SampleFileView]
+    quotas: dict[str, int]
+
+
+class SampleDiffView(BaseModel):
+    added: dict[str, list[SampleCandidateView]]
+    withdrawn: dict[str, list[SampleCandidateView]]
+    reused_files: list[str]
+    read_files: list[str]
+    unchanged_snapshot: bool
+
+
+class SampleGenerateResponse(BaseModel):
+    sample: SampleListResponse
+    diff: SampleDiffView | None = None
+    message: str
+
+
+class SampleLastResponse(BaseModel):
+    sample: SampleListResponse
+    diff: SampleDiffView | None = None
+    last_attempt: dict | None = None
+    snapshot_still_current: bool = Field(
+        ..., description="生成该名单时的清单快照是否仍等于当前快照"
+    )
+    current_snapshot_id: str | None = None
+
+
+class SavedSampleItem(BaseModel):
+    station: str | None = None
+    month: str | None = None
+    snapshot_id: str | None = None
+    generated_at: str | None = None
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class SampleAuditResponse(BaseModel):
+    equivalent: bool
+    differences: list[str]
+    details: dict
+    full_snapshot_id: str
+    sample_snapshot_id: str
+    rows_read: int
+    notes: list[str]
+
+
+class SampleErrorResponse(BaseModel):
+    """失败响应体（HTTP 409/503 的 detail）。"""
+
+    error: str
+    reason_codes: list[str]
+    message: str
+    details: list[str] = Field(default_factory=list)
+    last_success_snapshot_id: str | None = None
+    last_success_generated_at: str | None = None
+    current_snapshot_id: str | None = None
